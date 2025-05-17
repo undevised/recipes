@@ -2,68 +2,39 @@ package main
 
 import (
 	"embed"
-	"html/template"
+	"flag"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
-	"time"
 
-	"undevised.com/recipes/templates"
+	"undevised.com/recipes/ui"
 )
 
+type application struct {
+	logger    *slog.Logger
+	templates embed.FS
+}
+
 func main() {
+	addr := flag.String("addr", ":3000", "TCP network address")
+	flag.Parse()
+
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
+	app := &application{
+		logger:    logger,
+		templates: ui.Files,
+	}
+
 	mux := http.NewServeMux()
-	mux.Handle("GET /", logRequest(logger, handleIndex(templates.FS)))
+	mux.HandleFunc("GET /", http.NotFound)
+	mux.HandleFunc("GET /{$}", app.home)
 
-	logger.Info("Starting web server")
+	logger.Info("Starting server", slog.String("addr", *addr))
 
-	err := http.ListenAndServe(":3000", mux)
+	err := http.ListenAndServe(*addr, app.logRequest(mux))
 	if err != nil {
 		log.Fatal(err)
 	}
-}
-
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (r *statusRecorder) WriteHeader(status int) {
-	r.status = status
-	r.ResponseWriter.WriteHeader(status)
-}
-
-func logRequest(logger *slog.Logger, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-
-		recordedWriter := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-
-		next.ServeHTTP(recordedWriter, r)
-
-		logger.Info("HTTP request",
-			slog.String("method", r.Method),
-			slog.String("path", r.URL.Path),
-			slog.Int("status", recordedWriter.status),
-			slog.Duration("duration", time.Since(start)),
-		)
-	})
-}
-
-func handleIndex(fs embed.FS) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tmpl, err := template.ParseFS(fs, "index.html")
-		if err != nil {
-			http.Error(w, "Error loading template", http.StatusInternalServerError)
-			return
-		}
-
-		err = tmpl.Execute(w, nil)
-		if err != nil {
-			http.Error(w, "Error rendering template", http.StatusInternalServerError)
-		}
-	})
 }
